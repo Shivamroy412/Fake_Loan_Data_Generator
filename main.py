@@ -3,9 +3,12 @@ import pandas as pd
 import math
 import datetime
 from datetime import timedelta
+import random
+import os
+from tqdm import tqdm
 
 fake = Faker('en_IN')
-
+N = 20000 #Number of entries
 
 class Loan:
     def __init__(self):
@@ -25,7 +28,7 @@ class Loan:
         self.collateral_value = fake.random.uniform(0.0, 100.0) * self.loan_amount
         self.collateral_value = round(self.collateral_value, 2)
 
-        self.tenure_years = fake.random_int(min=1, max=5)
+        self.tenure_years = fake.random_int(min=1, max=8)
 
         self.interest = round(fake.random.uniform(8.0,15.0), 1)
 
@@ -45,33 +48,60 @@ class Loan:
                         (math.pow((1 + monthly_interest), num_payments) - 1)
         return round(emi,2)
 
-loans = []
 
-for _ in range(100):
+loan_base = pd.DataFrame(columns=['loan_acc_num','customer_name','customer_address','loan_type','loan_amount','collateral_value','tenure_years','interest','monthly_emi','disbursal_date','default_date'])
+
+for _ in tqdm(range(N), desc= 'Generating the loan base...'):
     loan = Loan()
-    loans.append(loan)
+    loan_base = loan_base.append({'loan_acc_num':loan.loan_acc_num,'customer_name':loan.customer_name,'customer_address':loan.customer_address,'loan_type':loan.loan_type,'loan_amount':loan.loan_amount,'collateral_value':loan.collateral_value,'tenure_years':loan.tenure_years,'interest':loan.interest,'monthly_emi':loan.monthly_emi,'disbursal_date':loan.disbursal_date,'default_date':loan.default_date}, ignore_index=True)
 
-df = pd.DataFrame(columns=['loan_acc_num','customer_name','customer_address','loan_type','loan_amount','collateral_value','tenure_years','interest','monthly_emi','disbursal_date','default_date'])
-for loan in loans:
-    df = df.append({'loan_acc_num':loan.loan_acc_num,'customer_name':loan.customer_name,'customer_address':loan.customer_address,'loan_type':loan.loan_type,'loan_amount':loan.loan_amount,'collateral_value':loan.collateral_value,'tenure_years':loan.tenure_years,'interest':loan.interest,'monthly_emi':loan.monthly_emi,'disbursal_date':loan.disbursal_date,'default_date':loan.default_date}, ignore_index=True)
-
-print(loans_df)
+loan_base.reset_index(drop=True)
 
 
 
+#Generating the Dataset which has the repayment information
+
+# Create an empty DataFrame for storing the repayment data
+repayment_base = pd.DataFrame(columns=['loan_acc_num', 'repayment_date', 'repayment_amount'])
+
+# Iterate through the rows of the loan_base DataFrame
+for i, row in tqdm(loan_base.iterrows(), desc= 'Generating repayment base..'):
+    # Get the loan account number, start date, and default date
+    loan_acc_num = row['loan_acc_num']
+    start_date = row['disbursal_date']
+    default_date = row['default_date']
+    emi = row['monthly_emi']
+    # Calculate the number of months between the start date and the default date
+    num_months = (default_date.year - start_date.year) * 12 + default_date.month - start_date.month
+    # Generate a list of repayment dates and amounts
+    repayment_dates = [start_date + pd.DateOffset(months=i) + timedelta(days=fake.random_int(-6,8)) 
+                        for i in range(num_months)]
+                        # The timedelta adds some randomness to the repayment dates
+    repayment_amounts = []
+    # for each month
+    for i in range(num_months):
+        #decide if the repayment is less than emi with 15% probability
+        if random.random() < 0.15:
+            # if repayment is less than emi, use faker to generate a random float between 0 and emi
+            repayment_amounts.append(fake.random.uniform(0, emi))
+        else:
+            # else use full emi
+            repayment_amounts.append(emi)
+
+    # Append the repayment data to the second DataFrame
+    for date, amount in zip(repayment_dates, repayment_amounts):
+        repayment_base = repayment_base.append({'loan_acc_num': loan_acc_num,
+                                            'repayment_amount': amount,
+                                            'repayment_date': date}, ignore_index=True)
+
+repayment_base.reset_index(drop=True)
 
 
+# Saving the bases as csv files
+os.makedirs('output', exist_ok=True)
 
+loan_base_path = os.path.join('output', 'main_loan_base.csv') 
+repayment_base_path = os.path.join('output', 'repayment_base.csv')
 
-
-        # self.repayment_frequency = fake.random_element(elements=("Monthly", "Quarterly", "Semi-Annually", "Annually"))
-        # self.repayment_amount = round((self.loan_amount/fake.random_int(min=12, max=60)), 2)
-        # # Calculate loan repayment dates based on disbursement date and frequency 
-        # if self.repayment_frequency == "Monthly":
-        #     self.loan_repayment_dates = [self.loan_date + pd.DateOffset(months=i) for i in range(1,fake.random_int(min=12, max=60))]
-        # elif self.repayment_frequency == "Quarterly":
-        #     self.loan_repayment_dates = [self.loan_date + pd.DateOffset(months=i*3) for i in range(1,fake.random_int(min=4, max=20))]
-        # elif self.repayment_frequency == "Semi-Annually":
-        #     self.loan_repayment_dates = [self.loan_date + pd.DateOffset(months=i*6) for i in range(1,fake.random_int(min=2, max=10))]
-        # else:
-        #     self.loan_repayment_dates = [self.loan_date + pd.DateOffset(years=i) for i in range(1,fake.random_int(min=2, max=5))]
+loan_base.to_csv(loan_base_path, index = False)
+repayment_base.to_csv(repayment_base_path, index = False)
