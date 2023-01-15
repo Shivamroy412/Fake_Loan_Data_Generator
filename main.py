@@ -6,6 +6,7 @@ from datetime import timedelta
 import random
 import os
 from tqdm import tqdm
+import gc
 
 fake = Faker('en_IN')
 N = 20000 #Number of entries
@@ -22,18 +23,25 @@ class Loan:
                                 "Two-Wheeler": (20_000, 3_00_000),
                                 "Consumer-Durable": (2_000, 25_000)}
 
-
         self.loan_amount = fake.random_int(*loan_type_range_dict[self.loan_type])
 
-        self.collateral_value = fake.random.uniform(0.0, 100.0) * self.loan_amount
+        # recovery_capacity would not appear on the dataset, as this is the target variable and needs to be 
+        # deduced manually, its requirement is to generate variables correlated to the target variable
+        self.recovery_capacity = fake.random.uniform(0.1, 0.95)
+
+        self.collateral_value = fake.random.uniform(0.0, 0.3) * self.loan_amount
         self.collateral_value = round(self.collateral_value, 2)
+
+        # Colateral value is part of the recovered amount, therefore recovery through payments will be:
+        self.rec_by_payments = (self.loan_amount * self.recovery_capacity) - self.collateral_value
+
+        #Disbursal date of the loan    
+        self.disbursal_date = fake.date_between(start_date=datetime.date(2012,1,1), 
+                                                end_date=datetime.date(2022,1,1))
 
         self.tenure_years = fake.random_int(min=1, max=8)
 
         self.interest = round(fake.random.uniform(8.0,15.0), 1)
-
-        self.disbursal_date = fake.date_between(start_date=datetime.date(2012,1,1), 
-                                                end_date=datetime.date(2022,1,1))
 
 
         #A borrower defaults if he/she misses the repayment for 90 days
@@ -49,14 +57,61 @@ class Loan:
         return round(emi,2)
 
 
-loan_base = pd.DataFrame(columns=['loan_acc_num','customer_name','customer_address','loan_type','loan_amount','collateral_value','tenure_years','interest','monthly_emi','disbursal_date','default_date'])
+    @property
+    def credit_score(self):
+        mean = self.recovery_capacity * 500 + 200
+        std = 100
+        return int(random.normalvariate(mean,std))
+
+    @property
+    def cheque_bounces(self):
+        mean = (1 - self.recovery_capacity) * 4 #Inversey related
+        std = 2
+        return max(0, int(random.normalvariate(mean,std)))
+
+    @property
+    def number_of_loans(self):
+        mean = (1 - self.recovery_capacity) * 4
+        std = 1
+        return max(0, int(random.normalvariate(mean, std)))
+
+    @property
+    def average_monthly_balance(self):
+        mean = self.recovery_capacity * (self.loan_amount / (self.tenure_years * 12))
+        std = mean * 0.4
+        return random.normalvariate(mean, std)
+
+    @property
+    def missed_repayments(self):
+        mean = (1 - self.recovery_capacity) * (self.tenure_years*12) * 0.6 #Inversey related
+        std = 2
+        return max(0, int(random.normalvariate(mean,std)))
+
+
+
+loan_base = pd.DataFrame(columns=['loan_acc_num','customer_name','customer_address','loan_type','loan_amount',
+                                  'collateral_value','credit_score', 'cheque_bounces', 'number_of_loans', 
+                                  'average_monthly_balance', 'missed_repayments','tenure_years','interest',
+                                  'monthly_emi','disbursal_date','default_date'])
+loan_list_of_dicts = []
 
 for _ in tqdm(range(N), desc= 'Generating the loan base...'):
     loan = Loan()
-    loan_base = loan_base.append({'loan_acc_num':loan.loan_acc_num,'customer_name':loan.customer_name,'customer_address':loan.customer_address,'loan_type':loan.loan_type,'loan_amount':loan.loan_amount,'collateral_value':loan.collateral_value,'tenure_years':loan.tenure_years,'interest':loan.interest,'monthly_emi':loan.monthly_emi,'disbursal_date':loan.disbursal_date,'default_date':loan.default_date}, ignore_index=True)
+    loan_list_of_dicts.append({'loan_acc_num':loan.loan_acc_num,'customer_name':loan.customer_name,
+                                  'customer_address':loan.customer_address,'loan_type':loan.loan_type,
+                                  'loan_amount':loan.loan_amount,'collateral_value':loan.collateral_value,
+                                  'cheque_bounces': loan.cheque_bounces, 'number_of_loans': loan.number_of_loans, 
+                                  'average_monthly_balance': loan.average_monthly_balance, 
+                                  'missed_repayments': loan.missed_repayments,
+                                  'tenure_years':loan.tenure_years,'interest':loan.interest,
+                                  'monthly_emi':loan.monthly_emi,'disbursal_date':loan.disbursal_date,
+                                  'default_date':loan.default_date, 
+                                  'recovery_capacity': loan.recovery_capacity, 
+                                  'rec_by_payments': loan.rec_by_payments})
 
+loan_base = pd.DataFrame(loan_list_of_dicts)
+loan_base.drop(columns = ['recovery_capacity', 'rec_by_payments'], inplace = True)
 loan_base.reset_index(drop=True)
-
 
 
 #Generating the Dataset which has the repayment information
@@ -65,34 +120,44 @@ loan_base.reset_index(drop=True)
 repayment_base = pd.DataFrame(columns=['loan_acc_num', 'repayment_date', 'repayment_amount'])
 
 # Iterate through the rows of the loan_base DataFrame
-for i, row in tqdm(loan_base.iterrows(), desc= 'Generating repayment base..'):
+for loan in tqdm(loan_list_of_dicts, desc= 'Generating repayment base..'):
     # Get the loan account number, start date, and default date
-    loan_acc_num = row['loan_acc_num']
-    start_date = row['disbursal_date']
-    default_date = row['default_date']
-    emi = row['monthly_emi']
-    # Calculate the number of months between the start date and the default date
-    num_months = (default_date.year - start_date.year) * 12 + default_date.month - start_date.month
-    # Generate a list of repayment dates and amounts
-    repayment_dates = [start_date + pd.DateOffset(months=i) + timedelta(days=fake.random_int(-6,8)) 
-                        for i in range(num_months)]
-                        # The timedelta adds some randomness to the repayment dates
+    loan_acc_num = loan['loan_acc_num']
+    start_date = loan['disbursal_date'] 
+    emi = loan['monthly_emi']
+    rec_by_payments = loan['rec_by_payments']
+
+
     repayment_amounts = []
-    # for each month
-    for i in range(num_months):
-        #decide if the repayment is less than emi with 15% probability
+    repayment_dates = []
+
+    date_counter = start_date # Initialised the date to be increased inside the loop below
+
+    while rec_by_payments > 0:
+        
+        # Decide if the repayment is less than emi with 15% probability
         if random.random() < 0.15:
-            # if repayment is less than emi, use faker to generate a random float between 0 and emi
-            repayment_amounts.append(fake.random.uniform(0, emi))
+            # If repayment is less than emi, use faker to generate a random float between 0 and emi
+            amount = fake.random.uniform(0, emi)
         else:
-            # else use full emi
-            repayment_amounts.append(emi)
+            # Else use full emi
+            amount = emi
+        
+        repayment_amounts.append(amount)
+        rec_by_payments -=  amount
+
+        # Repayment dates
+        date_counter += timedelta(days= 30 + fake.random_int(-6,8))
+        # The timedelta adds some randomness to the repayment dates
+
+        repayment_dates.append(date_counter)
+
 
     # Append the repayment data to the second DataFrame
     for date, amount in zip(repayment_dates, repayment_amounts):
         repayment_base = repayment_base.append({'loan_acc_num': loan_acc_num,
-                                            'repayment_amount': amount,
-                                            'repayment_date': date}, ignore_index=True)
+                                                'repayment_amount': amount,
+                                                'repayment_date': date}, ignore_index=True)
 
 repayment_base.reset_index(drop=True)
 
@@ -100,8 +165,8 @@ repayment_base.reset_index(drop=True)
 # Saving the bases as csv files
 os.makedirs('output', exist_ok=True)
 
-loan_base_path = os.path.join('output', 'main_loan_base.csv') 
-repayment_base_path = os.path.join('output', 'repayment_base.csv')
+loan_base_path = os.path.join('output', 'main_loan_base1.csv') 
+repayment_base_path = os.path.join('output', 'repayment_base1.csv')
 
 loan_base.to_csv(loan_base_path, index = False)
 repayment_base.to_csv(repayment_base_path, index = False)
