@@ -6,10 +6,9 @@ from datetime import timedelta
 import random
 import os
 from tqdm import tqdm
-import gc
 
 fake = Faker('en_IN')
-N = 20000 #Number of entries
+N = 20 #Number of entries
 
 class Loan:
     def __init__(self):
@@ -39,7 +38,7 @@ class Loan:
         self.disbursal_date = fake.date_between(start_date=datetime.date(2012,1,1), 
                                                 end_date=datetime.date(2022,1,1))
 
-        self.tenure_years = fake.random_int(min=1, max=8)
+        self.tenure_years = fake.random_int(min=1, max=5)
 
         self.interest = round(fake.random.uniform(8.0,15.0), 1)
 
@@ -88,11 +87,6 @@ class Loan:
         return max(0, int(random.normalvariate(mean,std)))
 
 
-
-loan_base = pd.DataFrame(columns=['loan_acc_num','customer_name','customer_address','loan_type','loan_amount',
-                                  'collateral_value','credit_score', 'cheque_bounces', 'number_of_loans', 
-                                  'average_monthly_balance', 'missed_repayments','tenure_years','interest',
-                                  'monthly_emi','disbursal_date','default_date'])
 loan_list_of_dicts = []
 
 for _ in tqdm(range(N), desc= 'Generating the loan base...'):
@@ -116,10 +110,8 @@ loan_base.reset_index(drop=True)
 
 #Generating the Dataset which has the repayment information
 
-# Create an empty DataFrame for storing the repayment data
-repayment_base = pd.DataFrame(columns=['loan_acc_num', 'repayment_date', 'repayment_amount'])
-
-# Iterate through the rows of the loan_base DataFrame
+repayment_list = []
+# Iterate through the values in the loan list of dicts
 for loan in tqdm(loan_list_of_dicts, desc= 'Generating repayment base..'):
     # Get the loan account number, start date, and default date
     loan_acc_num = loan['loan_acc_num']
@@ -152,13 +144,14 @@ for loan in tqdm(loan_list_of_dicts, desc= 'Generating repayment base..'):
 
         repayment_dates.append(date_counter)
 
-
+    
     # Append the repayment data to the second DataFrame
     for date, amount in zip(repayment_dates, repayment_amounts):
-        repayment_base = repayment_base.append({'loan_acc_num': loan_acc_num,
-                                                'repayment_amount': amount,
-                                                'repayment_date': date}, ignore_index=True)
+        repayment_list.append({'loan_acc_num': loan_acc_num,
+                               'repayment_amount': amount,
+                               'repayment_date': date})
 
+repayment_base = pd.DataFrame(repayment_list)
 repayment_base.reset_index(drop=True)
 
 
