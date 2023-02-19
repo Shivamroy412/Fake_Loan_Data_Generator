@@ -208,9 +208,6 @@ def generate_monthly_balance():
     return monthly_balance_base
 
 
-
-
-
 loan_base, loan_list_of_dicts = generate_main_loan_base()
 
 repayment_base = generate_repayments()
